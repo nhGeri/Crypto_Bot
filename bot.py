@@ -49,8 +49,8 @@ POLL_INTERVAL_SEC: int = int(os.getenv("POLL_INTERVAL_SEC", "60"))  # mennyit v�
 DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"      # true = nem küld valódi ordereket
 
 # Telegram értesítők (opcionális)
-TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")     # Telegram bot token
-TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "") # Telegram chat ID
+TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 API_BASE = "https://api.ethereal.trade/v1"
 
@@ -74,8 +74,11 @@ _tg_offset: int = 0  # utolsó feldolgozott update_id
 
 async def send_telegram(message: str):
     """Telegram üzenet küldése."""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        log.warning("Telegram: TOKEN vagy CHAT_ID nincs beállítva, kihagyás")
+    if not TELEGRAM_TOKEN:
+        log.warning("Telegram hiba: TELEGRAM_TOKEN hiányzik!")
+        return
+    if not TELEGRAM_CHAT_ID:
+        log.warning("Telegram hiba: TELEGRAM_CHAT_ID hiányzik!")
         return
     try:
         log.info(f"Telegram küldés → chat_id={TELEGRAM_CHAT_ID}")
