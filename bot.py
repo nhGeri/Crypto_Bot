@@ -701,6 +701,8 @@ class EtherealBot:
     async def run(self):
         """Főhurok - 0-24-ben fut."""
         log.info(f"Bot elindult | Polling: {POLL_INTERVAL_SEC}s")
+        log.info(f"Telegram TOKEN: {'OK (' + TELEGRAM_TOKEN[:10] + '...)' if TELEGRAM_TOKEN else 'HIÁNYZIK!'}")
+        log.info(f"Telegram CHAT_ID: {TELEGRAM_CHAT_ID if TELEGRAM_CHAT_ID else 'HIÁNYZIK!'}")
 
         # Termék adatok betöltése
         try:
