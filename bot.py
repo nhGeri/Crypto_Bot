@@ -75,13 +75,19 @@ _tg_offset: int = 0  # utolsó feldolgozott update_id
 async def send_telegram(message: str):
     """Telegram üzenet küldése."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        log.warning("Telegram: TOKEN vagy CHAT_ID nincs beállítva, kihagyás")
         return
     try:
+        log.info(f"Telegram küldés → chat_id={TELEGRAM_CHAT_ID}")
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
+            r = await client.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
             )
+            if r.status_code == 200:
+                log.info("Telegram: üzenet sikeresen elküldve")
+            else:
+                log.warning(f"Telegram API hiba {r.status_code}: {r.text}")
     except Exception as e:
         log.warning(f"Telegram küldési hiba: {e}")
 
@@ -523,7 +529,7 @@ class EtherealBot:
         
         pos = self.current_position
         close_side = 1 if pos.side == "LONG" else 0
-        qty = str(pos.quantity.quantize(Decimal("0.001"), rounding=ROUND_DOWN))
+        qty = str(pos.quantity.quantize(Decimal("0.00001"), rounding=ROUND_DOWN))
         
         log.info(f"Pozicio zarasa: {pos.side} {qty}")
         await self.api.place_order(
@@ -548,11 +554,12 @@ class EtherealBot:
         # Pozíció méret kiszámítása
         position_usd = Decimal(POSITION_SIZE_USD)
         quantity = (position_usd * LEVERAGE / price).quantize(
-            Decimal("0.001"), rounding=ROUND_DOWN
+            Decimal("0.00001"), rounding=ROUND_DOWN
         )
-        
-        if quantity <= 0:
-            log.warning("Tul kis pozicio méret, kihagyás")
+        log.info(f"Számított pozíció: {quantity} BTC (${position_usd} * {LEVERAGE}x / ${price:.2f})")
+
+        if quantity <= Decimal("0.00001"):
+            log.warning(f"Tul kis pozicio méret: {quantity} BTC, kihagyás")
             return
 
         side = 0 if signal == "LONG" else 1
