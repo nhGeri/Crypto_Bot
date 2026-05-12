@@ -588,6 +588,14 @@ class EtherealBot:
                 stop_loss=stop_loss,
                 take_profit=take_profit,
             )
+            await send_telegram(
+                f"{'📈' if signal == 'LONG' else '📉'} <b>{'LONG' if signal == 'LONG' else 'SHORT'} nyitva</b>\n"
+                f"Piac: {PRODUCT_SYMBOL}\n"
+                f"Ár: ${price:.2f}\n"
+                f"Méret: {quantity} ({POSITION_SIZE_USD}$ × {LEVERAGE}x)\n"
+                f"SL: ${stop_loss:.2f} | TP: ${take_profit:.2f}\n"
+                f"{'🧪 DRY RUN' if DRY_RUN else '🔴 ÉLES'}"
+            )
 
     async def run_once(self, iteration: int = 0):
         """Egy iteracio futtatasa."""
@@ -711,6 +719,7 @@ class EtherealBot:
             f"Parancsok: /stop /start /status /balance"
         )
 
+        heartbeat_every = max(1, 3600 // POLL_INTERVAL_SEC)  # ~óránként
         iteration = 0
         while not self._stop_event.is_set():
             iteration += 1
@@ -719,6 +728,32 @@ class EtherealBot:
                 await self.run_once(iteration)
             else:
                 log.info(f"--- Szünet (Telegram /stop) | #{iteration} ---")
+
+            if iteration % heartbeat_every == 0:
+                try:
+                    price = await self.api.get_current_price()
+                    pos_text = "Nincs nyitott pozíció"
+                    if self.current_position:
+                        p = self.current_position
+                        if p.side == "LONG":
+                            pnl = (price - p.entry_price) * p.quantity * LEVERAGE
+                        else:
+                            pnl = (p.entry_price - price) * p.quantity * LEVERAGE
+                        pos_text = (
+                            f"{p.side} | {p.quantity} BTC\n"
+                            f"Belépés: ${p.entry_price:.2f} → Most: ${price:.2f}\n"
+                            f"PnL: {'+' if pnl >= 0 else ''}{pnl:.2f} USD"
+                        )
+                    state = "▶️ AKTÍV" if self.trading_active else "⏸ SZÜNET"
+                    await send_telegram(
+                        f"💓 <b>Bot életjel</b> (#{iteration})\n"
+                        f"Állapot: {state} | {'🧪 DRY RUN' if DRY_RUN else '🔴 ÉLES'}\n"
+                        f"BTC ár: ${price:.2f}\n"
+                        f"Pozíció: {pos_text}"
+                    )
+                except Exception as e:
+                    log.warning(f"Heartbeat hiba: {e}")
+
             await asyncio.sleep(POLL_INTERVAL_SEC)
 
     async def cleanup(self):
