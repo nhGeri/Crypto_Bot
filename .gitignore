@@ -1,0 +1,35 @@
+# Privát kulcsok és titkok - SOHA ne kerüljön GitHubra!
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtualenv
+venv/
+.venv/
+env/
+ENV/
+
+# Log fájlok
+*.log
+bot.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
