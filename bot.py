@@ -29,8 +29,11 @@ PRIVATE_KEY: str = os.getenv("PRIVATE_KEY", "")
 SUBACCOUNT: str = os.getenv("SUBACCOUNT", "primary")
 PRODUCT_SYMBOL: str = os.getenv("PRODUCT", "BTCUSD")
 
-BASE_ORDER_USD: Decimal = Decimal(os.getenv("BASE_ORDER_USD", "2"))
-MAX_SAFETY_LEVELS: int = 4  # 0, 1, 2, 3, 4 (összesen 5 szint)
+BASE_ORDER_USD: Decimal = Decimal(os.getenv("BASE_ORDER_USD", "10"))
+MAX_SAFETY_LEVELS_LONG: int = int(os.getenv("MAX_SAFETY_LEVELS_LONG", "2"))
+MAX_SAFETY_LEVELS_SHORT: int = int(os.getenv("MAX_SAFETY_LEVELS_SHORT", "3"))
+VIRTUAL_CAPITAL: Decimal = Decimal(os.getenv("VIRTUAL_CAPITAL", "350"))
+ACCOUNT_NAME: str = os.getenv("ACCOUNT_NAME", "Bot_Primary")
 
 BB_CANDLE_INTERVAL: str = os.getenv("BB_CANDLE_INTERVAL", "15m")
 RSI_PERIOD: int = int(os.getenv("RSI_PERIOD", "14"))
@@ -98,21 +101,23 @@ class SimAccount:
     capital: Decimal
     virtual_balance: Decimal
     csv_file: str
-    position: Optional[DCAPosition] = None
-    win_count: int = 0
-    loss_count: int = 0
+    long_pos: Optional[DCAPosition] = None
+    short_pos: Optional[DCAPosition] = None
+    win_count_long: int = 0
+    loss_count_long: int = 0
+    win_count_short: int = 0
+    loss_count_short: int = 0
 
 SIM_ACCOUNTS = [
-    SimAccount(name="$50 Fiók", capital=Decimal("50"), virtual_balance=Decimal("50"), csv_file="dca_trades_50.csv"),
-    SimAccount(name="$100 Fiók", capital=Decimal("100"), virtual_balance=Decimal("100"), csv_file="dca_trades_100.csv"),
-    SimAccount(name="$200 Fiók", capital=Decimal("200"), virtual_balance=Decimal("200"), csv_file="dca_trades_200.csv"),
+    SimAccount(name=ACCOUNT_NAME, capital=VIRTUAL_CAPITAL, virtual_balance=VIRTUAL_CAPITAL, csv_file=f"dca_trades_{ACCOUNT_NAME.lower()}.csv")
 ]
 
 @dataclass
 class IndicatorResult:
     price: Decimal
     rsi: float
-    signal: str
+    upper_bb: Decimal
+    lower_bb: Decimal
 
 # ---------------------------------------------
 # TELEGRAM
@@ -206,9 +211,11 @@ class EtherealClient:
         })
 
     async def get_current_price(self) -> Decimal:
+        to_ts = int(time.time())
+        from_ts = to_ts - 300
         r = await self.client.get(
             "https://tradingview.ethereal.trade/v1/oracle-price/history",
-            params={"symbol": f"{PRODUCT_SYMBOL}-Perp", "resolution": "1", "countback": 1},
+            params={"symbol": f"{PRODUCT_SYMBOL}-Perp", "resolution": "1", "from": from_ts, "to": to_ts, "countback": 1},
         )
         data = r.json()
         return Decimal(str(data["c"][-1]))
@@ -234,16 +241,20 @@ def calculate_indicators(df: pd.DataFrame) -> IndicatorResult:
     rsi_s = ma_up / ma_down
     rsi = 100 - (100 / (1 + rsi_s))
     
+    # Bollinger Bands
+    sma = closes.rolling(window=20).mean()
+    std = closes.rolling(window=20).std(ddof=0)
+    upper_bb = sma + 2 * std
+    lower_bb = sma - 2 * std
+    
     price_val = Decimal(str(closes.iloc[-1]))
     open_val = Decimal(str(df.iloc[-1]["open"]))
     rsi_val = float(rsi.iloc[-1])
+    upper_val = Decimal(str(upper_bb.iloc[-1]))
+    lower_val = Decimal(str(lower_bb.iloc[-1]))
     
-    signal = "HOLD"
-    if rsi_val < 35 and price_val > open_val:
-        signal = "LONG"
-        
-    log.info(f"Indikátorok | Ár: {price_val:.2f} | Open: {open_val:.2f} | RSI: {rsi_val:.1f} | Jel: {signal}")
-    return IndicatorResult(price=price_val, rsi=rsi_val, signal=signal)
+    log.info(f"Indikátorok | Ár: {price_val:.2f} | RSI: {rsi_val:.1f} | BB: {lower_val:.2f} - {upper_val:.2f}")
+    return IndicatorResult(price=price_val, rsi=rsi_val, upper_bb=upper_val, lower_bb=lower_val)
 
 # ---------------------------------------------
 # FŐBOT LOGIKA
@@ -278,16 +289,24 @@ class EtherealDCABot:
         except Exception:
             pass
 
-    async def _close_position(self, acc: SimAccount, exit_price: Decimal, reason: str):
-        if not acc.position: return
+    async def _close_position(self, acc: SimAccount, exit_price: Decimal, reason: str, side: str):
+        pos = acc.long_pos if side == "LONG" else acc.short_pos
+        if not pos: return
             
-        pos = acc.position
-        pnl = (exit_price - pos.average_price) * pos.total_quantity
+        if side == "LONG":
+            pnl = (exit_price - pos.average_price) * pos.total_quantity
+        else:
+            pnl = (pos.average_price - exit_price) * pos.total_quantity
             
         acc.virtual_balance += pos.total_invested + pnl
         win_loss = "WIN" if pnl > 0 else "LOSS"
-        if pnl > 0: acc.win_count += 1
-        else: acc.loss_count += 1
+        
+        if side == "LONG":
+            if pnl > 0: acc.win_count_long += 1
+            else: acc.loss_count_long += 1
+        else:
+            if pnl > 0: acc.win_count_short += 1
+            else: acc.loss_count_short += 1
             
         self._append_csv(acc.csv_file, [
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), pos.side, pos.safety_level,
@@ -296,90 +315,120 @@ class EtherealDCABot:
             float(acc.virtual_balance.quantize(Decimal("0.0001")))
         ])
         
-        log.info(f"[{acc.name}] Pozíció zárva ({reason}) | {win_loss} | PnL: {pnl:.4f} USD")
+        log.info(f"[{acc.name}] {side} Pozíció zárva ({reason}) | {win_loss} | PnL: {pnl:.4f} USD")
         await send_telegram(
-            f"{'✅' if pnl > 0 else '❌'} <b>{acc.name} - Zárva ({reason})</b>\n"
+            f"{'✅' if pnl > 0 else '❌'} <b>{acc.name} - Zárva ({reason}) [{side}]</b>\n"
             f"Max Szint: {pos.safety_level}\n"
             f"Átlagár: ${pos.average_price:.2f} → Kilépő ár: ${exit_price:.2f}\n"
             f"<b>PnL: {'+' if pnl >= 0 else ''}{pnl:.4f} USD</b>\n"
             f"Új egyenleg: ${acc.virtual_balance:.2f}"
         )
         
-        await self.api.place_order(side="SHORT", quantity=pos.total_quantity, price=exit_price, reduce_only=True)
-        acc.position = None
+        if side == "LONG":
+            await self.api.place_order(side="SHORT", quantity=pos.total_quantity, price=exit_price, reduce_only=True)
+            acc.long_pos = None
+        else:
+            await self.api.place_order(side="LONG", quantity=pos.total_quantity, price=exit_price, reduce_only=True)
+            acc.short_pos = None
 
-    async def _open_or_add_position(self, acc: SimAccount, price: Decimal, level: int):
+    async def _open_or_add_position(self, acc: SimAccount, price: Decimal, level: int, side: str):
         amount_usd = get_so_amount(level)
         
         if acc.virtual_balance < amount_usd:
-            log.warning(f"[{acc.name}] Elégtelen egyenleg a(z) {level}. szinthez. Kereskedés blokkolva.")
+            log.warning(f"[{acc.name}] Elégtelen egyenleg a(z) {level}. szinthez ({side}).")
             if level > 0:
-                await send_telegram(f"⚠️ <b>{acc.name} - SO Blokkolva!</b>\nElégtelen tőke a(z) {level}. szinthez.")
+                await send_telegram(f"⚠️ <b>{acc.name} - SO Blokkolva ({side})!</b>\nElégtelen tőke a(z) {level}. szinthez.")
             return
 
         acc.virtual_balance -= amount_usd
         quantity = (amount_usd / price).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        
+        pos = acc.long_pos if side == "LONG" else acc.short_pos
 
-        if acc.position is None:
-            acc.position = DCAPosition("LONG", level, amount_usd, quantity, price, price, price)
-            log.info(f"[{acc.name}] Új LONG pozíció nyitva | Ár: ${price:.2f} | Összeg: ${amount_usd}")
+        if pos is None:
+            new_pos = DCAPosition(side, level, amount_usd, quantity, price, price, price)
+            if side == "LONG": acc.long_pos = new_pos
+            else: acc.short_pos = new_pos
+            
+            log.info(f"[{acc.name}] Új {side} pozíció nyitva | Ár: ${price:.2f} | Összeg: ${amount_usd}")
             await send_telegram(
-                f"📈 <b>{acc.name} - ÚJ POZÍCIÓ: LONG</b>\n"
+                f"📈 <b>{acc.name} - ÚJ POZÍCIÓ: {side}</b>\n"
                 f"Szint: Alap (0)\nÁr: ${price:.2f}\nBefektetve: ${amount_usd:.2f}"
             )
         else:
-            pos = acc.position
             pos.safety_level = level
             pos.total_invested += amount_usd
             pos.total_quantity += quantity
             pos.average_price = pos.total_invested / pos.total_quantity
             pos.extreme_price = price
             
-            log.info(f"[{acc.name}] Safety Order #{level} | Vettünk: ${amount_usd} @ ${price:.2f}")
+            log.info(f"[{acc.name}] {side} Safety Order #{level} | Vettünk: ${amount_usd} @ ${price:.2f}")
             await send_telegram(
-                f"🛡 <b>{acc.name} - SAFETY ORDER #{level}</b>\n"
+                f"🛡 <b>{acc.name} - {side} SAFETY ORDER #{level}</b>\n"
                 f"Új átlagár: ${pos.average_price:.2f}\nÖsszesen befektetve: ${pos.total_invested:.2f}"
             )
             
-        await self.api.place_order(side="LONG", quantity=quantity, price=price)
+        await self.api.place_order(side=side, quantity=quantity, price=price)
 
     def _update_extreme_price(self, acc: SimAccount, price: Decimal):
-        if acc.position and price < acc.position.extreme_price:
-            acc.position.extreme_price = price
+        if acc.long_pos and price < acc.long_pos.extreme_price:
+            acc.long_pos.extreme_price = price
+        if acc.short_pos and price > acc.short_pos.extreme_price:
+            acc.short_pos.extreme_price = price
 
-    async def _check_take_profit(self, acc: SimAccount, price: Decimal) -> bool:
-        if not acc.position: return False
-        tp_pct = TP_PCT.get(acc.position.safety_level, Decimal("0.015"))
-        target = acc.position.average_price * (Decimal("1") + tp_pct)
-        if price >= target:
-            await self._close_position(acc, price, "Take Profit")
+    async def _check_take_profit(self, acc: SimAccount, price: Decimal, side: str) -> bool:
+        pos = acc.long_pos if side == "LONG" else acc.short_pos
+        if not pos: return False
+        
+        tp_pct = TP_PCT.get(pos.safety_level, Decimal("0.015"))
+        if side == "LONG":
+            target = pos.average_price * (Decimal("1") + tp_pct)
+            triggered = price >= target
+        else:
+            target = pos.average_price * (Decimal("1") - tp_pct)
+            triggered = price <= target
+            
+        if triggered:
+            await self._close_position(acc, price, "Take Profit", side)
             return True
         return False
 
-    async def _check_safety_orders(self, acc: SimAccount, price: Decimal) -> bool:
-        if not acc.position or acc.position.safety_level >= MAX_SAFETY_LEVELS: return False
-        next_level = acc.position.safety_level + 1
+    async def _check_safety_orders(self, acc: SimAccount, price: Decimal, side: str) -> bool:
+        pos = acc.long_pos if side == "LONG" else acc.short_pos
+        if not pos: return False
+        
+        max_l = MAX_SAFETY_LEVELS_LONG if side == "LONG" else MAX_SAFETY_LEVELS_SHORT
+        if pos.safety_level >= max_l: return False
+        
+        next_level = pos.safety_level + 1
         so_drop = SO_PCT.get(next_level, Decimal("0.015"))
-        target = acc.position.average_price * (Decimal("1") - so_drop)
-        if price <= target:
-            await self._open_or_add_position(acc, price, next_level)
+        
+        if side == "LONG":
+            target = pos.average_price * (Decimal("1") - so_drop)
+            triggered = price <= target
+        else:
+            target = pos.average_price * (Decimal("1") + so_drop)
+            triggered = price >= target
+            
+        if triggered:
+            await self._open_or_add_position(acc, price, next_level, side)
             return True
         return False
 
-    async def _check_reset_logic(self, acc: SimAccount, price: Decimal) -> bool:
-        if not acc.position or acc.position.safety_level < 3: return False
-        target = acc.position.extreme_price * Decimal("1.003")
-        if price >= target:
-            await self._close_position(acc, price, "Reset Bounce")
-            return True
-        return False
-
-    async def _check_stop_loss(self, acc: SimAccount, price: Decimal) -> bool:
-        if not acc.position: return False
-        sl_drop = Decimal("0.13") # -13% az átlagártól
-        target = acc.position.average_price * (Decimal("1") - sl_drop)
-        if price <= target:
-            await self._close_position(acc, price, "Stop Loss (-13%)")
+    async def _check_stop_loss(self, acc: SimAccount, price: Decimal, side: str) -> bool:
+        pos = acc.long_pos if side == "LONG" else acc.short_pos
+        if not pos: return False
+        
+        sl_drop = Decimal("0.13") # +-13% az átlagártól
+        if side == "LONG":
+            target = pos.average_price * (Decimal("1") - sl_drop)
+            triggered = price <= target
+        else:
+            target = pos.average_price * (Decimal("1") + sl_drop)
+            triggered = price >= target
+            
+        if triggered:
+            await self._close_position(acc, price, "Stop Loss (13%)", side)
             return True
         return False
 
@@ -394,14 +443,21 @@ class EtherealDCABot:
             for acc in SIM_ACCOUNTS:
                 self._update_extreme_price(acc, price)
                 
-                if acc.position:
-                    if await self._check_take_profit(acc, price): continue
-                    if await self._check_reset_logic(acc, price): continue
-                    if await self._check_stop_loss(acc, price): continue
-                    await self._check_safety_orders(acc, price)
+                if acc.long_pos:
+                    if not await self._check_take_profit(acc, price, "LONG"):
+                        if not await self._check_stop_loss(acc, price, "LONG"):
+                            await self._check_safety_orders(acc, price, "LONG")
                 else:
-                    if indicator.signal == "LONG":
-                        await self._open_or_add_position(acc, price, 0)
+                    if indicator.rsi < 35 and price < indicator.lower_bb:
+                        await self._open_or_add_position(acc, price, 0, "LONG")
+                        
+                if acc.short_pos:
+                    if not await self._check_take_profit(acc, price, "SHORT"):
+                        if not await self._check_stop_loss(acc, price, "SHORT"):
+                            await self._check_safety_orders(acc, price, "SHORT")
+                else:
+                    if indicator.rsi > 70 and price > indicator.upper_bb:
+                        await self._open_or_add_position(acc, price, 0, "SHORT")
 
         except Exception as e:
             log.exception(f"Váratlan hiba: {e}")
@@ -422,13 +478,21 @@ class EtherealDCABot:
                     price = await self.api.get_current_price()
                     lines = []
                     for acc in SIM_ACCOUNTS:
-                        unrealized = Decimal("0")
-                        if acc.position:
-                            unrealized = (price - acc.position.average_price) * acc.position.total_quantity
-                            pos_txt = f"Lvl {acc.position.safety_level}"
+                        u_long = Decimal("0")
+                        if acc.long_pos:
+                            u_long = (price - acc.long_pos.average_price) * acc.long_pos.total_quantity
+                            l_txt = f"L-Lvl {acc.long_pos.safety_level}"
                         else:
-                            pos_txt = "Üres"
-                        lines.append(f"<b>{acc.name}</b>: ${acc.virtual_balance:.2f} | {pos_txt} | U-PnL: {unrealized:+.4f}$")
+                            l_txt = "L-Üres"
+                            
+                        u_short = Decimal("0")
+                        if acc.short_pos:
+                            u_short = (acc.short_pos.average_price - price) * acc.short_pos.total_quantity
+                            s_txt = f"S-Lvl {acc.short_pos.safety_level}"
+                        else:
+                            s_txt = "S-Üres"
+                            
+                        lines.append(f"<b>{acc.name}</b>: ${acc.virtual_balance:.2f}\n  {l_txt} | U-PnL: {u_long:+.2f}$\n  {s_txt} | U-PnL: {u_short:+.2f}$")
                         
                     await send_telegram(f"💓 <b>Életjel</b> | BTC: ${price:.2f}\n\n" + "\n".join(lines))
                 except Exception:
@@ -446,23 +510,30 @@ class EtherealDCABot:
                 if text == "/status":
                     lines = []
                     for acc in SIM_ACCOUNTS:
-                        if acc.position:
-                            p = acc.position
-                            lines.append(f"<b>{acc.name}</b>\nSzint: {p.safety_level}/{MAX_SAFETY_LEVELS} | Átlag: ${p.average_price:.2f}")
+                        lines.append(f"<b>{acc.name}</b>")
+                        if acc.long_pos:
+                            lines.append(f"🟢 LONG: L{acc.long_pos.safety_level}/{MAX_SAFETY_LEVELS_LONG} | Átlag: ${acc.long_pos.average_price:.2f}")
                         else:
-                            lines.append(f"<b>{acc.name}</b>: Nincs pozíció.")
-                    await send_telegram(f"📊 <b>Státusz</b>\n\n" + "\n\n".join(lines))
+                            lines.append("🟢 LONG: Nincs")
+                        if acc.short_pos:
+                            lines.append(f"🔴 SHORT: L{acc.short_pos.safety_level}/{MAX_SAFETY_LEVELS_SHORT} | Átlag: ${acc.short_pos.average_price:.2f}")
+                        else:
+                            lines.append("🔴 SHORT: Nincs")
+                        lines.append("")
+                    await send_telegram(f"📊 <b>Státusz</b>\n\n" + "\n".join(lines))
                     
                 elif text == "/balance":
                     try:
                         price = await self.api.get_current_price()
                         lines = []
                         for acc in SIM_ACCOUNTS:
-                            unrealized = Decimal("0")
                             total_equity = acc.virtual_balance
-                            if acc.position:
-                                unrealized = (price - acc.position.average_price) * acc.position.total_quantity
-                                total_equity += acc.position.total_invested + unrealized
+                            if acc.long_pos:
+                                u_long = (price - acc.long_pos.average_price) * acc.long_pos.total_quantity
+                                total_equity += acc.long_pos.total_invested + u_long
+                            if acc.short_pos:
+                                u_short = (acc.short_pos.average_price - price) * acc.short_pos.total_quantity
+                                total_equity += acc.short_pos.total_invested + u_short
                             
                             lines.append(
                                 f"<b>{acc.name}</b>\n"

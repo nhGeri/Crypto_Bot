@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "PowerShell(npm --version 2>&1)",
+      "PowerShell(npm install -g @railway/cli 2>&1)",
+      "PowerShell(tail -5)",
+      "PowerShell(railway --version 2>&1)"
     ]
   }
 }

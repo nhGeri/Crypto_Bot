@@ -13,7 +13,7 @@ from bot import (
     RSI_PERIOD, PRODUCT_SYMBOL, BB_CANDLE_INTERVAL
 )
 
-DAYS_TO_BACKTEST = 30
+DAYS_TO_BACKTEST = 90
 
 # Új fiókok csak a backteszthez
 BT_ACCOUNTS = [
@@ -29,6 +29,7 @@ class BacktestStats:
         self.wins_at_level = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
         self.sum_levels_for_tp = 0
         self.total_tp_trades = 0
+        self.capital_requirements = []
 
 BT_STATS = {acc.name: BacktestStats() for acc in BT_ACCOUNTS}
 
@@ -113,6 +114,7 @@ def close_position(acc: SimAccount, price: Decimal, reason: str):
     stats = BT_STATS[acc.name]
     level = pos.safety_level
     stats.trades_closed_at_level[level] = stats.trades_closed_at_level.get(level, 0) + 1
+    stats.capital_requirements.append(pos.total_invested)
     
     if pnl > 0:
         acc.win_count += 1
@@ -226,7 +228,10 @@ async def run_backtest():
                 lvl_wr = (lvl_wins / closed) * 100
                 print(f"     - Szint {lvl}: {lvl_wr:.1f}% ({lvl_wins}/{closed} trade)")
             else:
-                print(f"     - Szint {lvl}: Nincs lezárt trade")
+                print(f"     - Szint {lvl}: 0 alkalommal")
+                
+        avg_cap = sum(stats.capital_requirements) / len(stats.capital_requirements) if stats.capital_requirements else 0
+        print(f"  4. Átlagos tőkeszükséglet per trade: ${avg_cap:.2f}")
         print("-" * 40)
 
 if __name__ == "__main__":
