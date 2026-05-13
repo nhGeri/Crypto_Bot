@@ -261,9 +261,9 @@ def calculate_indicators(df: pd.DataFrame) -> IndicatorResult:
 # ---------------------------------------------
 class EtherealDCABot:
     def __init__(self):
-        if not PRIVATE_KEY:
-            raise ValueError("PRIVATE_KEY hiányzik!")
-        self.signer = EthereumSigner(PRIVATE_KEY)
+        if not DRY_RUN and not PRIVATE_KEY:
+            raise ValueError("PRIVATE_KEY hiányzik (élő kereskedéshez szükséges)!")
+        self.signer = EthereumSigner(PRIVATE_KEY) if PRIVATE_KEY else None
         self.api = EtherealClient(self.signer)
         
         self.trading_active = True
