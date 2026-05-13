@@ -543,7 +543,9 @@ class EtherealDCABot:
             for upd in updates:
                 msg = upd.get("message") or upd.get("edited_message", {})
                 text = (msg.get("text") or "").strip().lower()
-                
+                if text:
+                    log.info(f"Telegram parancs érkezett: '{text}'")
+
                 if text == "/status":
                     lines = []
                     for acc in SIM_ACCOUNTS:
