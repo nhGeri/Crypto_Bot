@@ -431,7 +431,7 @@ class EtherealDCABot:
         else:
             pnl = (pos.average_price - exit_price) * pos.total_quantity
             
-        acc.virtual_balance += pnl
+        acc.virtual_balance += pos.total_invested + pnl
         win_loss = "WIN" if pnl > 0 else "LOSS"
         
         if pnl > 0:
@@ -744,10 +744,16 @@ class EtherealDCABot:
                                 else:
                                     unrealized = (p.average_price - price) * p.total_quantity
                             
+                            total_equity = acc.virtual_balance + unrealized
+                            if acc.position:
+                                total_equity += acc.position.total_invested
+                                
                             lines.append(
                                 f"<b>{acc.name}</b>\n"
-                                f"  Egyenleg: ${acc.virtual_balance:.2f}\n"
-                                f"  Nem realizált: {'+' if unrealized >= 0 else ''}{unrealized:.4f} USD"
+                                f"  Szabad egyenleg: ${acc.virtual_balance:.2f}\n"
+                                f"  Befektetve: ${acc.position.total_invested:.2f if acc.position else 0}\n"
+                                f"  Nem realizált: {'+' if unrealized >= 0 else ''}{unrealized:.4f} USD\n"
+                                f"  <b>Teljes Tőke: ${total_equity:.2f}</b>"
                             )
                         await send_telegram(
                             f"💰 <b>Egyenlegek | {PRODUCT_SYMBOL}: ${price:.2f}</b>\n\n"
