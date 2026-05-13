@@ -60,8 +60,8 @@ log = logging.getLogger("ethereal-dca-bot")
 # DCA PARAMÉTEREK (FIBONACCI)
 # ---------------------------------------------
 TP_PCT = {
-    0: Decimal("0.015"),
-    1: Decimal("0.015"),
+    0: Decimal("0.010"),
+    1: Decimal("0.010"),
     2: Decimal("0.010"), # Fib 23.6%
     3: Decimal("0.007"), # Fib 38.2%
     4: Decimal("0.003"), # Minimalizálás
