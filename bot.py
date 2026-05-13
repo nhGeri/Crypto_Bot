@@ -77,10 +77,10 @@ SO_PCT = {
     4: Decimal("0.080"), # -8.0%
 }
 
-def get_so_amount(level: int) -> Decimal:
+def get_so_amount(level: int, base_order: Decimal) -> Decimal:
     if level == 0:
-        return BASE_ORDER_USD
-    return BASE_ORDER_USD * Decimal(str(2 ** level))
+        return base_order
+    return base_order * Decimal(str(2 ** level))
 
 # ---------------------------------------------
 # ADATSTRUKTÚRÁK
@@ -101,6 +101,9 @@ class SimAccount:
     capital: Decimal
     virtual_balance: Decimal
     csv_file: str
+    base_order_usd: Decimal
+    max_sl_long: int
+    max_sl_short: int
     long_pos: Optional[DCAPosition] = None
     short_pos: Optional[DCAPosition] = None
     win_count_long: int = 0
@@ -109,7 +112,15 @@ class SimAccount:
     loss_count_short: int = 0
 
 SIM_ACCOUNTS = [
-    SimAccount(name=ACCOUNT_NAME, capital=VIRTUAL_CAPITAL, virtual_balance=VIRTUAL_CAPITAL, csv_file=f"dca_trades_{ACCOUNT_NAME.lower()}.csv")
+    SimAccount(name="Bot_200", capital=Decimal("200"), virtual_balance=Decimal("200"),
+               csv_file="dca_trades_bot_200.csv", base_order_usd=Decimal("7"),
+               max_sl_long=2, max_sl_short=3),
+    SimAccount(name="Bot_500", capital=Decimal("500"), virtual_balance=Decimal("500"),
+               csv_file="dca_trades_bot_500.csv", base_order_usd=Decimal("15"),
+               max_sl_long=2, max_sl_short=3),
+    SimAccount(name="Bot_900", capital=Decimal("900"), virtual_balance=Decimal("900"),
+               csv_file="dca_trades_bot_900.csv", base_order_usd=Decimal("30"),
+               max_sl_long=2, max_sl_short=3),
 ]
 
 @dataclass
@@ -289,6 +300,32 @@ class EtherealDCABot:
         except Exception:
             pass
 
+    def _account_summary(self, acc: SimAccount) -> str:
+        trades = []
+        try:
+            with open(acc.csv_file, newline="", encoding="utf-8") as f:
+                trades = list(csv.DictReader(f))
+        except FileNotFoundError:
+            pass
+        total = len(trades)
+        pnl_realized = sum(float(t["pnl_usd"]) for t in trades)
+        wins = sum(1 for t in trades if t["win_loss"] == "WIN")
+        roi = pnl_realized / float(acc.capital) * 100 if total else 0
+        win_rate = wins / total * 100 if total else 0
+        best = max((float(t["pnl_usd"]) for t in trades), default=0)
+        worst = min((float(t["pnl_usd"]) for t in trades), default=0)
+        sign = "+" if pnl_realized >= 0 else ""
+        balance_info = f"${acc.virtual_balance:.2f} (indulás: ${acc.capital:.0f})"
+        if total == 0:
+            return f"<b>{acc.name}</b>\nEgyenleg: {balance_info}\nMég nincs lezárt trade."
+        return (
+            f"<b>{acc.name}</b> (alap: ${acc.base_order_usd}/order)\n"
+            f"Egyenleg: {balance_info}\n"
+            f"Trade: {total} | Win: {win_rate:.0f}% ({wins}/{total})\n"
+            f"PnL: {sign}{pnl_realized:.4f} USD ({sign}{roi:.2f}%)\n"
+            f"Legjobb: +{best:.4f} | Legrosszabb: {worst:.4f}"
+        )
+
     async def _close_position(self, acc: SimAccount, exit_price: Decimal, reason: str, side: str):
         pos = acc.long_pos if side == "LONG" else acc.short_pos
         if not pos: return
@@ -332,7 +369,7 @@ class EtherealDCABot:
             acc.short_pos = None
 
     async def _open_or_add_position(self, acc: SimAccount, price: Decimal, level: int, side: str):
-        amount_usd = get_so_amount(level)
+        amount_usd = get_so_amount(level, acc.base_order_usd)
         
         if acc.virtual_balance < amount_usd:
             log.warning(f"[{acc.name}] Elégtelen egyenleg a(z) {level}. szinthez ({side}).")
@@ -397,7 +434,7 @@ class EtherealDCABot:
         pos = acc.long_pos if side == "LONG" else acc.short_pos
         if not pos: return False
         
-        max_l = MAX_SAFETY_LEVELS_LONG if side == "LONG" else MAX_SAFETY_LEVELS_SHORT
+        max_l = acc.max_sl_long if side == "LONG" else acc.max_sl_short
         if pos.safety_level >= max_l: return False
         
         next_level = pos.safety_level + 1
@@ -512,11 +549,11 @@ class EtherealDCABot:
                     for acc in SIM_ACCOUNTS:
                         lines.append(f"<b>{acc.name}</b>")
                         if acc.long_pos:
-                            lines.append(f"🟢 LONG: L{acc.long_pos.safety_level}/{MAX_SAFETY_LEVELS_LONG} | Átlag: ${acc.long_pos.average_price:.2f}")
+                            lines.append(f"🟢 LONG: L{acc.long_pos.safety_level}/{acc.max_sl_long} | Átlag: ${acc.long_pos.average_price:.2f}")
                         else:
                             lines.append("🟢 LONG: Nincs")
                         if acc.short_pos:
-                            lines.append(f"🔴 SHORT: L{acc.short_pos.safety_level}/{MAX_SAFETY_LEVELS_SHORT} | Átlag: ${acc.short_pos.average_price:.2f}")
+                            lines.append(f"🔴 SHORT: L{acc.short_pos.safety_level}/{acc.max_sl_short} | Átlag: ${acc.short_pos.average_price:.2f}")
                         else:
                             lines.append("🔴 SHORT: Nincs")
                         lines.append("")
@@ -542,6 +579,11 @@ class EtherealDCABot:
                         await send_telegram(f"💰 <b>Egyenlegek</b>\n\n" + "\n\n".join(lines))
                     except Exception:
                         pass
+
+                elif text == "/pnl":
+                    parts = [self._account_summary(acc) for acc in SIM_ACCOUNTS]
+                    await send_telegram("📈 <b>Trade összesítő</b>\n\n" + "\n\n".join(parts))
+
             await asyncio.sleep(3)
 
     async def cleanup(self):
