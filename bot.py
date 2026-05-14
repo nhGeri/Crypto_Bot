@@ -18,7 +18,7 @@ load_dotenv()
 # ==========================================
 PRODUCT_SYMBOL = os.getenv("PRODUCT", "BTCUSD")
 VIRTUAL_CAPITAL = Decimal(os.getenv("VIRTUAL_CAPITAL", "200"))
-BASE_ORDER_USD = VIRTUAL_CAPITAL * Decimal("0.50") # Tőke x 50%
+BASE_ORDER_USD = VIRTUAL_CAPITAL * Decimal("0.33") # Tőke x 33%
 
 BB_CANDLE_INTERVAL = os.getenv("BB_CANDLE_INTERVAL", "15m")
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
