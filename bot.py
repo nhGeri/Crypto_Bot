@@ -29,10 +29,10 @@ PRIVATE_KEY: str = os.getenv("PRIVATE_KEY", "")
 SUBACCOUNT: str = os.getenv("SUBACCOUNT", "primary")
 PRODUCT_SYMBOL: str = os.getenv("PRODUCT", "BTCUSD")
 
-BASE_ORDER_USD: Decimal = Decimal(os.getenv("BASE_ORDER_USD", "10"))
-MAX_SAFETY_LEVELS_LONG: int = int(os.getenv("MAX_SAFETY_LEVELS_LONG", "2"))
-MAX_SAFETY_LEVELS_SHORT: int = int(os.getenv("MAX_SAFETY_LEVELS_SHORT", "3"))
-VIRTUAL_CAPITAL: Decimal = Decimal(os.getenv("VIRTUAL_CAPITAL", "350"))
+BASE_ORDER_USD: Decimal = Decimal(os.getenv("BASE_ORDER_USD", "50"))
+MAX_SAFETY_LEVELS_LONG: int = int(os.getenv("MAX_SAFETY_LEVELS_LONG", "1"))
+MAX_SAFETY_LEVELS_SHORT: int = int(os.getenv("MAX_SAFETY_LEVELS_SHORT", "0"))
+VIRTUAL_CAPITAL: Decimal = Decimal(os.getenv("VIRTUAL_CAPITAL", "200"))
 ACCOUNT_NAME: str = os.getenv("ACCOUNT_NAME", "Bot_Primary")
 
 BB_CANDLE_INTERVAL: str = os.getenv("BB_CANDLE_INTERVAL", "15m")
@@ -112,20 +112,21 @@ class SimAccount:
     loss_count_short: int = 0
 
 SIM_ACCOUNTS = [
-    SimAccount(name="Bot_200", capital=Decimal("200"), virtual_balance=Decimal("200"),
-               csv_file="dca_trades_bot_200.csv", base_order_usd=Decimal("7"),
-               max_sl_long=2, max_sl_short=3),
-    SimAccount(name="Bot_500", capital=Decimal("500"), virtual_balance=Decimal("500"),
-               csv_file="dca_trades_bot_500.csv", base_order_usd=Decimal("15"),
-               max_sl_long=2, max_sl_short=3),
-    SimAccount(name="Bot_900", capital=Decimal("900"), virtual_balance=Decimal("900"),
-               csv_file="dca_trades_bot_900.csv", base_order_usd=Decimal("30"),
-               max_sl_long=2, max_sl_short=3),
+    SimAccount(
+        name=ACCOUNT_NAME, 
+        capital=VIRTUAL_CAPITAL, 
+        virtual_balance=VIRTUAL_CAPITAL,
+        csv_file="dca_trades.csv", 
+        base_order_usd=BASE_ORDER_USD,
+        max_sl_long=MAX_SAFETY_LEVELS_LONG, 
+        max_sl_short=MAX_SAFETY_LEVELS_SHORT
+    ),
 ]
 
 @dataclass
 class IndicatorResult:
     price: Decimal
+    open: Decimal
     rsi: float
     upper_bb: Decimal
     lower_bb: Decimal
@@ -265,7 +266,7 @@ def calculate_indicators(df: pd.DataFrame) -> IndicatorResult:
     lower_val = Decimal(str(lower_bb.iloc[-1]))
     
     log.info(f"Indikátorok | Ár: {price_val:.2f} | RSI: {rsi_val:.1f} | BB: {lower_val:.2f} - {upper_val:.2f}")
-    return IndicatorResult(price=price_val, rsi=rsi_val, upper_bb=upper_val, lower_bb=lower_val)
+    return IndicatorResult(price=price_val, open=open_val, rsi=rsi_val, upper_bb=upper_val, lower_bb=lower_val)
 
 # ---------------------------------------------
 # FŐBOT LOGIKA
@@ -485,16 +486,17 @@ class EtherealDCABot:
                         if not await self._check_stop_loss(acc, price, "LONG"):
                             await self._check_safety_orders(acc, price, "LONG")
                 else:
-                    if indicator.rsi < 35 and price < indicator.lower_bb:
+                    if indicator.rsi < 35 and price > indicator.open:
                         await self._open_or_add_position(acc, price, 0, "LONG")
                         
-                if acc.short_pos:
-                    if not await self._check_take_profit(acc, price, "SHORT"):
-                        if not await self._check_stop_loss(acc, price, "SHORT"):
-                            await self._check_safety_orders(acc, price, "SHORT")
-                else:
-                    if indicator.rsi > 70 and price > indicator.upper_bb:
-                        await self._open_or_add_position(acc, price, 0, "SHORT")
+                if acc.max_sl_short > 0:
+                    if acc.short_pos:
+                        if not await self._check_take_profit(acc, price, "SHORT"):
+                            if not await self._check_stop_loss(acc, price, "SHORT"):
+                                await self._check_safety_orders(acc, price, "SHORT")
+                    else:
+                        if indicator.rsi > 70 and price > indicator.upper_bb:
+                            await self._open_or_add_position(acc, price, 0, "SHORT")
 
         except Exception as e:
             log.exception(f"Váratlan hiba: {e}")
